@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<a href="{{ url_for('download_file') }}"><button class = "btn btn-warning">Download</button></a>
+<a href="{{ url_for('fraud') }}"><button class = "btn btn-success">SEARCH AGAIN</button></a>
+<a class="btn btn-danger" href="{{ url_for('logout') }}">LOGOUT</a>
+
+
+  <table id="data" class="table table-striped">
+    <thead>
+      <tr>
+        <th>Space</th>
+        <th>Fingerprint(s)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for space in json['Space'] %}
+
+        <tr>
+          <td><a href="{{ json['Space'][space] }}">{{ json['Space'][space] }}</a></td>
+          <td>{{ json['fingerprint'][space] }}</td>
+
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+{% endblock %}
