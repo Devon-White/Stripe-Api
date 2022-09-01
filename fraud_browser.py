@@ -3,7 +3,6 @@ from pyngrok import ngrok
 import pandas as pd
 import stripe
 from flask import Flask, render_template, redirect, url_for, request, send_file
-from flask_bootstrap import Bootstrap
 from flask_login import LoginManager, UserMixin, login_user, current_user, login_required, logout_user
 from flask_sqlalchemy import SQLAlchemy
 import os
