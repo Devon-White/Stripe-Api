@@ -30,7 +30,7 @@ class User(UserMixin, db.Model):
     password = db.Column(db.String(80))
 
 
-# Create Database Variable
+# Create Database Table Variable
 create_table = '''CREATE TABLE user (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE ,
