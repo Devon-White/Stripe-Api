@@ -110,11 +110,6 @@ def download_file():
     p = f"csvs/{current_user.username}_fingerprints.csv"
     return send_file(p,as_attachment=True)
 
-@app.route('/test')
-@login_required
-def test():
-    return render_template('test.html')
-
 
 @app.route('/fraud', methods=['GET', 'POST'])
 @login_required
