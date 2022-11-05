@@ -236,7 +236,7 @@ def logout():
     return redirect(url_for('login'))
 
 
-# Set the ngrok URL as the webhook for our SW phone
+# Set the ngrok URL
 def start_ngrok():
     # Set up a tunnel on port 5000 for our Flask object to interact locally
     url = ngrok.connect(5000).public_url
