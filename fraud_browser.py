@@ -1,4 +1,6 @@
 import json
+from sqlalchemy.orm import Session
+from flask_bootstrap import Bootstrap
 from pyngrok import ngrok
 import pandas as pd
 import stripe
@@ -7,20 +9,30 @@ from flask_login import LoginManager, UserMixin, login_user, current_user, login
 from flask_sqlalchemy import SQLAlchemy
 import os
 from dotenv import load_dotenv
-import sqlite3 as sql
 from pandas import read_csv
 from werkzeug.security import generate_password_hash, check_password_hash
 
 load_dotenv()
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+# Set the base directory as your current script's directory
+basedir = os.path.abspath(os.path.dirname(__file__))
+db_path = os.path.join(basedir, 'users.db')
 app = Flask(__name__)
 bootstrap = Bootstrap(app)
 app.config['SECRET_KEY'] = os.getenv('DB_SECRET_KEY')
-app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DB_URI')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + db_path
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
+session = db.session
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    return session.get(User, user_id)
 
 
 # User class to create our User object
@@ -28,33 +40,6 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(15), unique=True)
     password = db.Column(db.String(80))
-
-
-# Create Database Table Variable
-create_table = '''CREATE TABLE user (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE ,
-        password TEXT NULL
-        )'''
-
-# Checks to see if database exist, if not user creates database
-if os.path.exists('users.db'):
-    pass
-else:
-    try:
-        conn = sql.connect('users.db')
-        curs = conn.cursor()
-        curs.execute(create_table)
-        conn.commit()
-        conn.close()
-    finally:
-        pass
-
-
-# Loads our User by id in our SQL database
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
 
 
 @app.route('/', methods=['GET', 'POST'])
@@ -71,9 +56,7 @@ def login_handler():
         return redirect(url_for('fraud'))
 
     usernames = request.form.get('username')
-    print(usernames)
     pwd = request.form.get('password')
-    print(pwd)
 
     user = User.query.filter_by(username=usernames).first()
     if user:
@@ -86,18 +69,10 @@ def login_handler():
     return render_template('login.html')
 
 
-@app.route('/signup', methods=['GET', 'POST'])
-def signup():
-    if current_user.is_authenticated:
-        return redirect(url_for('dashboard'))
-
-    return render_template('signup.html')
-
-
 @app.route('/signup_handler', methods=['GET', 'POST'])
 def signup_handler():
     usernames = request.form.get('username')
-    pwd = generate_password_hash(request.form.get('password'), method='sha256')
+    pwd = generate_password_hash(request.form.get('password'), method='scrypt')
     new_user = User(username=usernames, password=pwd)
     db.session.add(new_user)
     db.session.commit()
@@ -108,7 +83,7 @@ def signup_handler():
 @login_required
 def download_file():
     p = f"csvs/{current_user.username}_fingerprints.csv"
-    return send_file(p,as_attachment=True)
+    return send_file(p, as_attachment=True)
 
 
 @app.route('/fraud', methods=['GET', 'POST'])
@@ -150,7 +125,7 @@ def fraud_handler():
             # Call next function and pass a list of spaces
             fPrintRetriever(spacelist)
         else:
-            return print("you stupid")
+            return print("No Results....")
 
     def fPrintRetriever(Spaces):
         # For each space in our SpaceList
@@ -225,7 +200,6 @@ def results(user_name):
     user_cvs = read_csv(f"csvs/{user_name.username}_fingerprints.csv")
     usercsv = user_cvs.to_json()
     usercsv = json.loads(usercsv)
-    print(usercsv['Space'])
     return render_template('results.html', tables=[data.to_html()], titles=[''], users=users, json=usercsv)
 
 
@@ -244,6 +218,8 @@ def start_ngrok():
 
 
 if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()
     if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         start_ngrok()
     app.run(debug=True)
