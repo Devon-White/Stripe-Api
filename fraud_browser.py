@@ -1,81 +1,81 @@
-import json
-from sqlalchemy.orm import Session
-from flask_bootstrap import Bootstrap
-from pyngrok import ngrok
-import pandas as pd
-import stripe
-from flask import Flask, render_template, redirect, url_for, request, send_file
-from flask_login import LoginManager, UserMixin, login_user, current_user, login_required, logout_user
-from flask_sqlalchemy import SQLAlchemy
 import os
+import json
+import pandas as pd
+from pyngrok import ngrok
 from dotenv import load_dotenv
-from pandas import read_csv
+from flask_bootstrap import Bootstrap
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_required, logout_user, current_user, login_user
+from flask import Flask, render_template, redirect, url_for, request, send_file
 from werkzeug.security import generate_password_hash, check_password_hash
+import stripe
+
+STRIPE_API_VERSION = "2020-08-27"
 
 load_dotenv()
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-# Set the base directory as your current script's directory
 basedir = os.path.abspath(os.path.dirname(__file__))
 db_path = os.path.join(basedir, 'users.db')
+
 app = Flask(__name__)
 bootstrap = Bootstrap(app)
 app.config['SECRET_KEY'] = os.getenv('DB_SECRET_KEY')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + db_path
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
 db = SQLAlchemy(app)
+session = db.session
+
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
-session = db.session
 
 
-@login_manager.user_loader
-def load_user(user_id):
-    return session.get(User, user_id)
-
-
-# User class to create our User object
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(15), unique=True)
     password = db.Column(db.String(80))
 
 
+@login_manager.user_loader
+def load_user(user_id):
+    return db.session.get(User, int(user_id))
+
+
 @app.route('/', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('fraud'))
-
     return render_template('login.html')
 
 
-@app.route('/login_handler', methods=['GET', 'POST'])
+@app.route('/login_handler', methods=['POST'])
 def login_handler():
     if current_user.is_authenticated:
         return redirect(url_for('fraud'))
 
-    usernames = request.form.get('username')
-    pwd = request.form.get('password')
+    username = request.form.get('username')
+    password = request.form.get('password')
 
-    user = User.query.filter_by(username=usernames).first()
-    if user:
-        if check_password_hash(user.password, pwd):
-            login_user(user, remember=True)
-            return redirect(url_for('fraud'))
+    user = User.query.filter_by(username=username).first()
 
-        return '<h1>Invalid username or password!</h1>'
+    if user and check_password_hash(user.password, password):
+        login_user(user, remember=True)
+        return redirect(url_for('fraud'))
 
-    return render_template('login.html')
+    return '<h1>Invalid username or password!</h1>', 401
 
 
-@app.route('/signup_handler', methods=['GET', 'POST'])
+@app.route('/signup_handler', methods=['POST'])
 def signup_handler():
-    usernames = request.form.get('username')
-    pwd = generate_password_hash(request.form.get('password'), method='scrypt')
-    new_user = User(username=usernames, password=pwd)
+    username = request.form.get('username')
+    password = generate_password_hash(request.form.get('password'), method='scrypt')
+
+    new_user = User(username=username, password=password)
     db.session.add(new_user)
     db.session.commit()
+
     return redirect(url_for('login'))
 
 
@@ -96,111 +96,70 @@ def fraud():
 @login_required
 def fraud_handler():
     stripe.api_key = os.getenv('STRIPE_TOKEN')
-    stripe.api_version = "2020-08-27"
+    stripe.api_version = STRIPE_API_VERSION
 
-    # Lists for caveman recursive searching
-    spacelist = []
-    checkedSpaces = []
-    checkedPrints = []
-    fingerprintlist = []
-    finaldict = {}
+    # Use sets for faster existence checking
+    spaces = set()
+    checked_spaces = set()
+    fingerprints = set()
+    checked_fingerprints = set()
 
-    d = []
+    final_dict = {}
 
-    def initsearch():
-        # Takes a cc fingerprint via input
-        firstprint = request.form.get('fingerprint')
-        if len(firstprint) == 0:
-            return
-        # Create a querystring and search stripe for that query
-        initquery = "payment_method_details.card.fingerprint:'" + firstprint + "'"
-        firstList = stripe.Charge.search(query=initquery)
-        # Proceeds with script if our stripe search returns data
-        if len(firstList.data) != 0:
-            # paginate the Stripe object returned from query and append every SPACE associated with the FINGERPRINT provided
-            for space in firstList.auto_paging_iter():
-                if len(space.metadata) != 0:
-                    if space.metadata.space_id not in spacelist:
-                        spacelist.append(space.metadata.space_id)
-            # Call next function and pass a list of spaces
-            fPrintRetriever(spacelist)
-        else:
-            return print("No Results....")
+    def search_and_retrieve(space_id=None, fingerprint=None):
+        if space_id is not None:
+            query = f"metadata['space_id']:'{space_id}'"
+        else:  # If space_id is not provided, fingerprint must be
+            query = f"payment_method_details.card.fingerprint:'{fingerprint}'"
 
-    def fPrintRetriever(Spaces):
-        # For each space in our SpaceList
-        for space in Spaces:
-            # Ensure the space has not been checked, then add it to our CHECKED spaces list
-            if space not in checkedSpaces:
-                print('checking: ', space)
-                checkedSpaces.append(space)
+        charge_list = stripe.Charge.search(query=query)
 
-                # Build a new querystring that searches for the SPACE by metadata
-                query = "metadata['space_id']:'" + space + "'"
-                printsRetrieved = stripe.Charge.search(query=str(query))
+        for charge in charge_list.auto_paging_iter():
+            if len(charge.metadata) != 0 and 'space_id' in charge.metadata:
+                current_space_id = charge.metadata['space_id']
+                current_fingerprint = charge.payment_method_details.card.fingerprint
 
-                # add the space to our final dictionary and build an empty list
-                finaldict[space] = []
+                if current_space_id not in final_dict:
+                    final_dict[current_space_id] = set()
 
-                # for each charge in the space, paginate over the object and retrieve the CC fingerprint
-                for fPrint in printsRetrieved.auto_paging_iter():
-                    curPrint = fPrint.payment_method_details.card.fingerprint
+                if current_fingerprint not in final_dict[current_space_id]:
+                    fingerprints.add(current_fingerprint)
+                    final_dict[current_space_id].add(current_fingerprint)
 
-                    # if the fingerprint is not associated to the space, associate it via our dictionary, AND add it to our FINGERPRINT list
-                    if curPrint not in finaldict[space]:
-                        fingerprintlist.append(curPrint)
-                        finaldict[space].append(curPrint)
+                if current_space_id not in spaces:
+                    spaces.add(current_space_id)
 
-        # if our FINGERPRINT list is longer than our CHECKED fingerprints, we have more fingerprints to search
-        if len(fingerprintlist) > len(checkedPrints):
-            spaceRetriever(fingerprintlist)
+    # Take a cc fingerprint via input
+    first_fingerprint = request.form.get('fingerprint')
+    if len(first_fingerprint) != 0:
+        search_and_retrieve(fingerprint=first_fingerprint)
 
-    def spaceRetriever(fPrintList):
+    while spaces > checked_spaces or fingerprints > checked_fingerprints:
+        for space in spaces - checked_spaces:
+            checked_spaces.add(space)
+            search_and_retrieve(space_id=space)
 
-        # For each FINGERPRINT in our list, ensure we have not checked that fingerprint
-        for fPrint in fPrintList:
-            if fPrint not in checkedPrints:
+        for fingerprint in fingerprints - checked_fingerprints:
+            checked_fingerprints.add(fingerprint)
+            search_and_retrieve(fingerprint=fingerprint)
 
-                # Add the fingerprint to our CHECKED list
-                checkedPrints.append(fPrint)
-
-                # Build a new querystring to search the fingerprints
-                printQuery = "payment_method_details.card.fingerprint:'" + fPrint + "'"
-                spacesRetrieved = stripe.Charge.search(query=str(printQuery))
-
-                # For each charge associated with that fingerprint, paginate over the object and retrieve the SPACE metadata
-                for space in spacesRetrieved.auto_paging_iter():
-
-                    # IF the space metadata is not in our SPACE list, add it
-                    if len(space.metadata) != 0:
-                        if space.metadata.space_id not in spacelist:
-                            spacelist.append(space.metadata.space_id)
-
-        # IF our space list is longer than our CHECKED spaces list, we have more searches to make
-        if len(spacelist) > len(checkedSpaces):
-            fPrintRetriever(spacelist)
-
-    # Starts our initial search and prints the final dictionary when we exhaust all SPACES and FINGERPRINTS associated with the origin FINGERPRINT
-    initsearch()
-    for space in finaldict:
-        d.append(("https://internal.signalwire.com/spaces/" + space, finaldict[space]))
-        print("https://internal.signalwire.com/spaces/" + space, finaldict[space])
+    d = [(f"https://internal.signalwire.com/spaces/{space}", list(final_dict[space])) for space in final_dict]
     user_name = current_user
     df = pd.DataFrame(d, columns=('Space', 'fingerprint'))
     df.to_csv(f'csvs/{user_name.username}_fingerprints.csv', index=False, encoding='utf-8')
     return results(user_name)
 
 
+
 @app.route('/results', methods=['GET', 'POST'])
 @login_required
 def results(user_name):
-    # converting csv to html
     data = pd.read_csv(f'csvs/{user_name.username}_fingerprints.csv')
-    users = User.query
-    user_cvs = read_csv(f"csvs/{user_name.username}_fingerprints.csv")
-    usercsv = user_cvs.to_json()
-    usercsv = json.loads(usercsv)
-    return render_template('results.html', tables=[data.to_html()], titles=[''], users=users, json=usercsv)
+    users = User.query.all()
+    user_csv = data.to_json()
+    user_csv = json.loads(user_csv)
+
+    return render_template('results.html', tables=[data.to_html()], titles=[''], users=users, json=user_csv)
 
 
 @app.route('/logout')
@@ -210,9 +169,7 @@ def logout():
     return redirect(url_for('login'))
 
 
-# Set the ngrok URL
 def start_ngrok():
-    # Set up a tunnel on port 5000 for our Flask object to interact locally
     url = ngrok.connect(5000).public_url
     print(' * Tunnel URL:', url)
 
@@ -220,6 +177,7 @@ def start_ngrok():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
+
     if os.environ.get('WERKZEUG_RUN_MAIN') != 'true':
         start_ngrok()
     app.run(debug=True)
